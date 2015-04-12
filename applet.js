@@ -50,15 +50,18 @@ ProfileMenuItem.prototype = {
 
     activate: function(){
         this.settings.activeProfile = this.profileName;
-        for(let key in this.profile){
-            let type = this.getVariantType(key);
-            this.gsettings.set_value(key, new GLib.Variant(type, this.profile[key]));
+        for(let schema in this.profile){
+            let settings = this.gsettings[schema];
+            for(let key in this.profile[schema]){
+                let type = this.getVariantType(settings, key);
+                settings.set_value(key, new GLib.Variant(type, this.profile[schema][key]));
+            }
         }
         this.applet.updateProfilesSection();
     },
 
-    getVariantType: function(key){
-        let range = this.gsettings.get_range(key);
+    getVariantType: function(settings, key){
+        let range = settings.get_range(key);
         let type = range.get_child_value(0).unpack();
         let v = range.get_child_value(1);
 
@@ -150,8 +153,13 @@ ProfileSwitcherApplet.prototype = {
         this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "active-profile", "activeProfile", bind(this.updateProfilesSection, this));
         this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "profiles", "profiles", bind(this.buildProfilesSection, this));
 
-        this.gsettings = new Gio.Settings({schema: "org.cinnamon"});
-        this.gsettingsChangedId = null;
+        this.gsettings = {};
+        let availableSchemas = Gio.Settings.list_schemas();
+        for(let i = 0, l = availableSchemas.length; i < l; ++i){
+            let schema = availableSchemas[i];
+            if(schema.match("cinnamon"))
+                this.gsettings[schema] = new Gio.Settings({schema: schema});
+        }
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -199,31 +207,43 @@ ProfileSwitcherApplet.prototype = {
     },
 
     onTrackStateChanged: function(item){
-        if(this.gsettingsChangedId)
-            this.gsettings.disconnect(this.gsettingsChangedId);
+        for(let schema in this.gsettings){
+            let settings = this.gsettings[schema];
 
-        if(item.state)
-            this.gsettingsChangedId = this.gsettings.connect("changed", bind(this.onGSettingsChanged, this));
-        else
-            this.gsettingsChangedId = null;
+            if(settings.changedId){
+                settings.disconnect(settings.changedId);
+                delete settings.changedId;
+            }
 
+            if(item.state)
+                settings.changedId = settings.connect("changed", bind(this.onGSettingsChanged, this));
+        }
     },
 
     onGSettingsChanged: function(settings, key){
         let profile = this.settings.profiles[this.settings.activeProfile];
+        let schema = settings.schema;
 
-        if(profile[key] === undefined){
+        if(!profile[schema])
+            profile[schema] = {};
+
+        if(profile[schema][key] === undefined){
             let defaultValue = unpack(settings.get_default_value(key));
             for(let profile in this.settings.profiles){
                 if(profile === this.settings.activeProfile)
                     continue;
 
-                this.settings.profiles[profile][key] = defaultValue;
+                profile = this.settings.profiles[profile];
+
+                if(!profile[schema])
+                    profile[schema] = {};
+
+                profile[schema][key] = defaultValue;
             }
         }
 
         let value = unpack(settings.get_value(key));
-        profile[key] = value;
+        profile[schema][key] = value;
 
         this.settings.profiles.save();
     },
