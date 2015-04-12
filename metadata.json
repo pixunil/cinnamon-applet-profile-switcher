@@ -1,0 +1,6 @@
+{
+    "name": "Profile switcher",
+    "uuid": "profile-switcher@pixunil",
+    "description": "Change your settings profile",
+    "icon": "cs-user"
+}
