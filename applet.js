@@ -9,9 +9,16 @@ const St = imports.gi.St;
 
 //bind function with exception catching
 function bind(func, context){
+    var additionalArgs = [];
+    for(let i = 2, l = arguments.length; i < l; ++i)
+        additionalArgs.push(arguments[i]);
+
     function callback(){
         try {
-            return func.apply(context, arguments);
+            let args = additionalArgs.slice(0);
+            args.push.apply(args, arguments);
+
+            return func.apply(context, args);
         } catch(e){
             global.logError(e);
             return null;
@@ -32,55 +39,6 @@ function unpack(value){
     return value;
 }
 
-function ProfileMenuItem(){
-    this._init.apply(this, arguments);
-}
-
-ProfileMenuItem.prototype = {
-    __proto__: PopupMenu.PopupMenuItem.prototype,
-
-    _init: function(applet, profile){
-        PopupMenu.PopupMenuItem.prototype._init.call(this, profile);
-        this.applet = applet;
-        this.profile = applet.settings.profiles[profile];
-        this.profileName = profile;
-        this.settings = applet.settings;
-        this.gsettings = applet.gsettings;
-    },
-
-    activate: function(){
-        this.settings.activeProfile = this.profileName;
-        for(let schema in this.profile){
-            let settings = this.gsettings[schema];
-            for(let key in this.profile[schema]){
-                let type = this.getVariantType(settings, key);
-                settings.set_value(key, new GLib.Variant(type, this.profile[schema][key]));
-            }
-        }
-        this.applet.updateProfilesSection();
-    },
-
-    getVariantType: function(settings, key){
-        let range = settings.get_range(key);
-        let type = range.get_child_value(0).unpack();
-        let v = range.get_child_value(1);
-
-        if(type === "type"){
-            //v is boxed empty array, type of its elements is the allowed value type
-            return v.get_child_value(0).get_type_string().slice(1);
-        } else if(type === "enum"){
-            //v is an array with the allowed values
-            return v.get_child_value(0).get_child_value(0).get_type_string();
-        } else if(type === "flags"){
-            //v is an array with the allowed values
-            return v.get_child_value(0).get_type_string();
-        } else if(type === "range"){
-            //type_str is a tuple giving the range
-            return v.get_child_value(0).get_type_string()[1];
-        }
-    }
-}
-
 function IconMenuItem(){
     this._init.apply(this, arguments);
 }
@@ -98,14 +56,54 @@ IconMenuItem.prototype = {
         this.addActor(this.label);
     },
 
-    setColumnWidths: function() {
+    setColumnWidths: function(){
         this._columnWidths = null;
     },
 
-    getColumnWidths: function() {
+    getColumnWidths: function(){
         return [];
     }
+};
+
+function ProfileMenuItem(){
+    this._init.apply(this, arguments);
 }
+
+ProfileMenuItem.prototype = {
+    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
+
+    _init: function(manager, profileName){
+        PopupMenu.PopupSubMenuMenuItem.prototype._init.call(this, profileName, true);
+
+        this.profileName = profileName;
+
+        this.connect("activate", bind(manager.changeProfile, manager));
+
+        let addItem = new IconMenuItem(_("Add Profile"), "list-add");
+        addItem.connect("activate", bind(manager.addProfile, manager, this));
+        this.menu.addMenuItem(addItem);
+
+        let removeItem = new IconMenuItem(_("Remove Profile"), "list-remove");
+        removeItem.activate = bind(manager.removeProfile, manager, this);
+        this.menu.addMenuItem(removeItem);
+
+        let removeItem = new IconMenuItem(_("Rename Profile"), "text-editor");
+        removeItem.connect("activate", bind(manager.renameProfile, manager, this));
+        this.menu.addMenuItem(removeItem);
+    },
+
+    _onButtonReleaseEvent: function(actor, event){
+        if(event.get_button() === 1)
+            this.activate();
+        if(event.get_button() === 3)
+            this.menu.toggle();
+        return true;
+    },
+
+    activate: function(event, keepMenu){
+        this.emit("activate", event, keepMenu);
+    }
+};
 
 function EntryDialog(){
     this._init.apply(this, arguments);
@@ -134,24 +132,16 @@ EntryDialog.prototype = {
             }, this)
         }]);
     }
-}
+};
 
-function ProfileSwitcherApplet(){
+function ProfileManager(){
     this._init.apply(this, arguments);
 }
 
-ProfileSwitcherApplet.prototype = {
-    __proto__: Applet.IconApplet.prototype,
-
-    _init: function(orientation, panelHeight, instanceId){
-        Applet.IconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
-        this.set_applet_icon_symbolic_name("avatar-default");
-
-        this.settings = {};
-        this.settingProvider = new Settings.AppletSettings(this.settings, "profile-switcher@pixunil", instanceId);
-
-        this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "active-profile", "activeProfile", bind(this.updateProfilesSection, this));
-        this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "profiles", "profiles", bind(this.buildProfilesSection, this));
+ProfileManager.prototype = {
+    _init: function(applet){
+        this.applet = applet;
+        this.settings = applet.settings;
 
         this.gsettings = {};
         let availableSchemas = Gio.Settings.list_schemas();
@@ -160,63 +150,86 @@ ProfileSwitcherApplet.prototype = {
             if(schema.match("cinnamon"))
                 this.gsettings[schema] = new Gio.Settings({schema: schema});
         }
-
-        this.menuManager = new PopupMenu.PopupMenuManager(this);
-        this.menu = new Applet.AppletPopupMenu(this, orientation);
-        this.menuManager.addMenu(this.menu);
-
-        this.profilesSection = new PopupMenu.PopupMenuSection;
-        this.menu.addMenuItem(this.profilesSection);
-
-        this.buildProfilesSection();
-
-        this.trackChanges = new PopupMenu.PopupSwitchMenuItem(_("Track changes"), false);
-        this._applet_context_menu.addMenuItem(this.trackChanges);
-        this.trackChanges.connect("toggled", bind(this.onTrackStateChanged, this));
-
-        this.addProfile = new IconMenuItem(_("Add profile"), "list-add");
-        this._applet_context_menu.addMenuItem(this.addProfile);
-        this.addProfile.connect("activate", bind(this.onAddProfile, this));
     },
 
-    buildProfilesSection: function(){
-        let items = this.profilesSection._getMenuItems();
-        let oldProfiles = {};
-        for(let i = 0, l = items.length; i < l; ++i)
-            oldProfiles[items[i].profileName] = items[i];
+    addProfile: function(){
+        let dialog = new EntryDialog(_("Profile name"), bind(function(name){
+            if(name !== "" && !this.settings.profiles[name]){
+                let activeProfile = this.settings.profiles[this.settings.activeProfile];
+                //clone profile object
+                this.settings.profiles[name] = JSON.parse(JSON.stringify(activeProfile));
+                this.settings.activeProfile = name;
 
-        for(let profile in this.settings.profiles){
-            if(oldProfiles[profile]){
-                delete oldProfiles[profile];
-            } else if(profile !== "save"){
-                let item = new ProfileMenuItem(this, profile);
-                this.profilesSection.addMenuItem(item);
+                this.applet.buildProfilesSection();
+            }
+        }, this));
+        dialog.open();
+    },
+
+    removeProfile: function(item){
+        let profileName = item.profileName;
+        delete this.settings.profiles[profileName];
+        this.settings.profiles.save();
+        if(profileName === this.settings.activeProfile){
+            for(let profile in this.settings.profiles){
+                if(profile !== "save"){
+                    this.changeProfile(profile);
+                    break;
+                }
             }
         }
 
-        for(let profile in oldProfiles)
-            oldProfiles[profile].destroy();
-
-        this.updateProfilesSection();
+        item.destroy();
     },
 
-    updateProfilesSection: function(){
-        let items = this.profilesSection._getMenuItems();
-        for(let i = 0, l = items.length; i < l; ++i)
-            items[i].setShowDot(items[i].profileName === this.settings.activeProfile);
-    },
+    renameProfile: function(item){
+        let dialog = new EntryDialog(_("Profile name"), bind(function(newName){
+            if(newName !== "" && !this.settings.profiles[newName]){
+                let oldName = item.profileName;
 
-    onTrackStateChanged: function(item){
-        for(let schema in this.gsettings){
-            let settings = this.gsettings[schema];
+                this.settings.profiles[newName] = this.settings.profiles[oldName];
+                delete this.settings.profiles[oldName];
+                if(this.settings.activeProfile === oldName)
+                    this.settings.activeProfile = newName;
 
-            if(settings.changedId){
-                settings.disconnect(settings.changedId);
-                delete settings.changedId;
+                item.label.text = newName;
             }
+        }, this));
+        dialog.open();
+    },
 
-            if(item.state)
-                settings.changedId = settings.connect("changed", bind(this.onGSettingsChanged, this));
+    changeProfile: function(item){
+        let profileName = item.profileName;
+        let profile = this.settings.profiles[profileName];
+        this.settings.activeProfile = profileName;
+
+        for(let schema in profile){
+            let settings = this.gsettings[schema];
+            for(let key in profile[schema]){
+                let type = this.getVariantType(settings, key);
+                settings.set_value(key, new GLib.Variant(type, profile[schema][key]));
+            }
+        }
+        this.applet.updateProfilesSection();
+    },
+
+    getVariantType: function(settings, key){
+        let range = settings.get_range(key);
+        let type = range.get_child_value(0).unpack();
+        let v = range.get_child_value(1);
+
+        if(type === "type"){
+            //v is boxed empty array, type of its elements is the allowed value type
+            return v.get_child_value(0).get_type_string().slice(1);
+        } else if(type === "enum"){
+            //v is an array with the allowed values
+            return v.get_child_value(0).get_child_value(0).get_type_string();
+        } else if(type === "flags"){
+            //v is an array with the allowed values
+            return v.get_child_value(0).get_type_string();
+        } else if(type === "range"){
+            //type_str is a tuple giving the range
+            return v.get_child_value(0).get_type_string()[1];
         }
     },
 
@@ -248,13 +261,98 @@ ProfileSwitcherApplet.prototype = {
         this.settings.profiles.save();
     },
 
-    onAddProfile: function(){
-        let dialog = new EntryDialog(_("Profile name"), bind(function(text){
-            this.settings.profiles[text] = {};
-            this.settings.activeProfile = text;
-            this.buildProfilesSection();
-        }, this));
-        dialog.open();
+    changeTrackState: function(active){
+        for(let schema in this.gsettings){
+            let settings = this.gsettings[schema];
+
+            if(settings.changedId){
+                settings.disconnect(settings.changedId);
+                delete settings.changedId;
+            }
+
+            if(active)
+                settings.changedId = settings.connect("changed", bind(this.onGSettingsChanged, this));
+        }
+    },
+
+    finalize: function(){
+        for(let schema in this.gsettings){
+            let settings = this.gsettings[schema];
+
+            if(settings.changedId){
+                settings.disconnect(settings.changedId);
+                delete settings.changedId;
+            }
+        }
+    }
+};
+
+function ProfileSwitcherApplet(){
+    this._init.apply(this, arguments);
+}
+
+ProfileSwitcherApplet.prototype = {
+    __proto__: Applet.IconApplet.prototype,
+
+    _init: function(orientation, panelHeight, instanceId){
+        Applet.IconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
+        this.set_applet_icon_symbolic_name("avatar-default");
+
+        this.settings = {};
+        this.settingProvider = new Settings.AppletSettings(this.settings, "profile-switcher@pixunil", instanceId);
+
+        this.manager = new ProfileManager(this);
+
+        this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "active-profile", "activeProfile", bind(this.updateProfilesSection, this));
+        this.settingProvider.bindProperty(Settings.BindingDirection.BIDIRECTIONAL, "profiles", "profiles", bind(this.buildProfilesSection, this));
+
+        this.menuManager = new PopupMenu.PopupMenuManager(this);
+        this.menu = new Applet.AppletPopupMenu(this, orientation);
+        this.menuManager.addMenu(this.menu);
+
+        this.profilesSection = new PopupMenu.PopupMenuSection;
+        this.menu.addMenuItem(this.profilesSection);
+
+        this.buildProfilesSection();
+
+        this.trackChanges = new PopupMenu.PopupSwitchMenuItem(_("Track changes"), false);
+        this._applet_context_menu.addMenuItem(this.trackChanges);
+        this.trackChanges.connect("toggled", bind(this.onTrackStateChanged, this));
+
+        let addProfile = new IconMenuItem(_("Add profile"), "list-add");
+        this._applet_context_menu.addMenuItem(addProfile);
+        addProfile.connect("activate", bind(this.manager.addProfile, this.manager));
+    },
+
+    buildProfilesSection: function(){
+        let items = this.profilesSection._getMenuItems();
+        let oldProfiles = {};
+        for(let i = 0, l = items.length; i < l; ++i)
+            oldProfiles[items[i].profileName] = items[i];
+
+        for(let profile in this.settings.profiles){
+            if(oldProfiles[profile]){
+                delete oldProfiles[profile];
+            } else if(profile !== "save"){
+                let item = new ProfileMenuItem(this.manager, profile);
+                this.profilesSection.addMenuItem(item);
+            }
+        }
+
+        for(let profile in oldProfiles)
+            oldProfiles[profile].destroy();
+
+        this.updateProfilesSection();
+    },
+
+    updateProfilesSection: function(){
+        let items = this.profilesSection._getMenuItems();
+        for(let i = 0, l = items.length; i < l; ++i)
+            items[i].setShowDot(items[i].profileName === this.settings.activeProfile);
+    },
+
+    onTrackStateChanged: function(item){
+        this.manager.changeTrackState(!!item.state);
     },
 
     on_applet_clicked: function(){
@@ -265,8 +363,9 @@ ProfileSwitcherApplet.prototype = {
         if(this.gsettingsChangedId)
             this.gsettings.disconnect(this.gsettingsChangedId);
         this.settingProvider.finalize();
+        this.manager.finalize();
     }
-}
+};
 
 function main(metadata, orientation, panelHeight, instanceId){
     return new ProfileSwitcherApplet(orientation, panelHeight, instanceId);
