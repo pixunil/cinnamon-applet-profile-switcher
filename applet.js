@@ -349,6 +349,8 @@ ProfileSwitcherApplet.prototype = {
         let items = this.profilesSection._getMenuItems();
         for(let i = 0, l = items.length; i < l; ++i)
             items[i].setShowDot(items[i].profileName === this.settings.activeProfile);
+
+        this.set_applet_tooltip(_("%s Profile").format(this.settings.activeProfile));
     },
 
     onTrackStateChanged: function(item){
