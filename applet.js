@@ -52,16 +52,8 @@ IconMenuItem.prototype = {
         this.icon = new St.Icon({style_class: "popup-menu-icon", icon_name: icon, icon_type: St.IconType.SYMBOLIC});
         this.label = new St.Label({text: text});
 
-        this.addActor(this.icon);
+        this.addActor(this.icon, {span: 0});
         this.addActor(this.label);
-    },
-
-    setColumnWidths: function(){
-        this._columnWidths = null;
-    },
-
-    getColumnWidths: function(){
-        return [];
     }
 };
 
@@ -231,6 +223,7 @@ ProfileManager.prototype = {
             //type_str is a tuple giving the range
             return v.get_child_value(0).get_type_string()[1];
         }
+        return null;
     },
 
     onGSettingsChanged: function(settings, key){
