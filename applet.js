@@ -222,8 +222,11 @@ ProfileManager.prototype = {
         if(!profile[schema])
             profile[schema] = {};
 
+        //no profile has got this key, so add it to all
         if(profile[schema][key] === undefined){
-            let defaultValue = settings.get_default_value(key).deep_unpack();
+            //get the previous value
+            let defaultValue = settings.lastValues[key];
+            //update every profile
             for(let profile in this.settings.profiles){
                 if(profile === this.settings.activeProfile)
                     continue;
@@ -252,8 +255,16 @@ ProfileManager.prototype = {
                 delete settings.changedId;
             }
 
-            if(active)
+            settings.lastValues = {};
+
+            if(active){
                 settings.changedId = settings.connect("changed", bind(this.onGSettingsChanged, this));
+
+                //cache values as they will maybe be overwritten
+                let keys = settings.list_keys();
+                for(let key of keys)
+                    settings.lastValues[key] = settings.get_value(key).deep_unpack();
+            }
         }
     },
 
