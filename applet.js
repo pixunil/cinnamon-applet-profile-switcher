@@ -28,17 +28,6 @@ function bind(func, context){
     return callback;
 }
 
-//recursively unpacks variants
-function unpack(value){
-    if(value instanceof GLib.Variant)
-        value = value.unpack();
-    if(value instanceof Object){
-        for(let i in value)
-            value[i] = unpack(value[i]);
-    }
-    return value;
-}
-
 function IconMenuItem(){
     this._init.apply(this, arguments);
 }
@@ -234,7 +223,7 @@ ProfileManager.prototype = {
             profile[schema] = {};
 
         if(profile[schema][key] === undefined){
-            let defaultValue = unpack(settings.get_default_value(key));
+            let defaultValue = settings.get_default_value(key).deep_unpack();
             for(let profile in this.settings.profiles){
                 if(profile === this.settings.activeProfile)
                     continue;
@@ -248,7 +237,7 @@ ProfileManager.prototype = {
             }
         }
 
-        let value = unpack(settings.get_value(key));
+        let value = settings.get_value(key).deep_unpack();
         profile[schema][key] = value;
 
         this.settings.profiles.save();
